@@ -1,9 +1,9 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinterdnd2 import DND_FILES, TkinterDnD
-import cv2
 from PIL import Image, ImageTk
 import os
+import io
 import subprocess
 import threading
 import re
@@ -124,6 +124,31 @@ class VideoConverter(TkinterDnD.Tk):
             },
             'MKV': {
                 'extension': '.mkv',
+                'presets': {
+                    'Maximum Quality': {
+                        'crf': 18,
+                        'preset': 'slow',
+                        'codec': 'libx264'
+                    },
+                    'High Quality': {
+                        'crf': 23,
+                        'preset': 'medium',
+                        'codec': 'libx264'
+                    },
+                    'Balanced': {
+                        'crf': 28,
+                        'preset': 'fast',
+                        'codec': 'libx264'
+                    },
+                    'Small Size': {
+                        'crf': 32,
+                        'preset': 'veryfast',
+                        'codec': 'libx264'
+                    }
+                }
+            },
+            'AVI': {
+                'extension': '.avi',
                 'presets': {
                     'Maximum Quality': {
                         'crf': 18,
@@ -319,7 +344,7 @@ class VideoConverter(TkinterDnD.Tk):
             params.extend(['-vf', f'scale={width}:-2'])
         
         # Add format-specific parameters
-        if selected_format in ['MP4', 'MKV']:
+        if selected_format in ['MP4', 'MKV', 'AVI']:
             if not self.crf_spinbox.instate(['disabled']):
                 params.extend(['-crf', self.crf_var.get()])
             if not self.encode_preset_combo.instate(['disabled']):
@@ -478,40 +503,45 @@ class VideoConverter(TkinterDnD.Tk):
         self.update_thumbnail()
 
     def update_thumbnail(self):
-        """Generate and display a thumbnail from the video."""
-        cap = cv2.VideoCapture(self.current_video)
-        if not cap.isOpened():
-            messagebox.showerror("Error", "Could not open video file")
-            cap.release()
-            return
-
-        # Read the first frame
-        ret, frame = cap.read()
-        cap.release()
-
-        if not ret:
-            messagebox.showerror("Error", "Could not read video frame")
-            return
-
-        # Get preview frame dimensions
-        frame_width = self.preview_frame.winfo_width()
-        frame_height = self.preview_frame.winfo_height()
-
-        # Calculate resize dimensions while maintaining aspect ratio
-        aspect_ratio = frame.shape[1] / frame.shape[0]
-        preview_height = 180  # Fixed preview height
-        target_width = int(preview_height * aspect_ratio)
-
-        # Resize and convert frame
-        frame = cv2.resize(frame, (target_width, preview_height))
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # Create and display thumbnail
-        image = Image.fromarray(frame)
-        photo = ImageTk.PhotoImage(image=image)
-        
-        self.preview_label.configure(image=photo)
-        self.preview_label.image = photo  # Keep a reference to prevent garbage collection
+            """Generate and display a thumbnail from the video."""
+            try:
+                # Use ffmpeg to extract first frame
+                cmd = [
+                    'ffmpeg',
+                    '-i', self.current_video,
+                    '-vframes', '1',  # Extract only first frame
+                    '-f', 'image2pipe',  # Output to pipe
+                    '-vcodec', 'ppm',    # Use PPM format
+                    '-'                  # Output to pipe
+                ]
+                
+                # Run ffmpeg and capture output
+                pipe = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                stdout, stderr = pipe.communicate()
+                
+                if pipe.returncode != 0:
+                    messagebox.showerror("Error", "Could not extract video thumbnail")
+                    return
+                    
+                # Create PIL Image from bytes
+                image = Image.open(io.BytesIO(stdout))
+                
+                # Calculate resize dimensions while maintaining aspect ratio
+                preview_height = 180
+                aspect_ratio = image.width / image.height
+                target_width = int(preview_height * aspect_ratio)
+                
+                # Resize image
+                image = image.resize((target_width, preview_height), Image.Resampling.LANCZOS)
+                
+                # Convert to PhotoImage and display
+                photo = ImageTk.PhotoImage(image)
+                self.preview_label.configure(image=photo)
+                self.preview_label.image = photo  # Keep a reference to prevent garbage collection
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not generate thumbnail: {str(e)}")
+                return
 
     def update_progress(self, current_time, duration):
         """Update progress bar and label."""
